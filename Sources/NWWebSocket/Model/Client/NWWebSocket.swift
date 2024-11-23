@@ -3,12 +3,12 @@ import Network
 
 /// A WebSocket client that manages a socket connection.
 open class NWWebSocket: WebSocketConnection {
-
+    
     // MARK: - Public properties
-
+    
     /// The WebSocket connection delegate.
     public weak var delegate: WebSocketConnectionDelegate?
-
+    
     /// The default `NWProtocolWebSocket.Options` for a WebSocket connection.
     ///
     /// These options specify that the connection automatically replies to Ping messages
@@ -16,14 +16,14 @@ open class NWWebSocket: WebSocketConnection {
     public static var defaultOptions: NWProtocolWebSocket.Options {
         let options = NWProtocolWebSocket.Options()
         options.autoReplyPing = true
-
+        
         return options
     }
-
+    
     private let errorWhileWaitingLimit = 20
-
+    
     // MARK: - Private properties
-
+    
     private var connection: NWConnection?
     private let endpoint: NWEndpoint
     private let parameters: NWParameters
@@ -32,9 +32,9 @@ open class NWWebSocket: WebSocketConnection {
     private var disconnectionWorkItem: DispatchWorkItem?
     private var isMigratingConnection = false
     private var errorWhileWaitingCount = 0
-
+    
     // MARK: - Initialization
-
+    
     /// Creates a `NWWebSocket` instance which connects to a socket `url` with some configuration `options`.
     /// - Parameters:
     ///   - request: The `URLRequest` containing the connection endpoint `URL`.
@@ -46,12 +46,22 @@ open class NWWebSocket: WebSocketConnection {
                             connectAutomatically: Bool = false,
                             options: NWProtocolWebSocket.Options = NWWebSocket.defaultOptions,
                             connectionQueue: DispatchQueue = .main) {
-
-        self.init(url: request.url!,
+        
+        self.init(nwEndpoint: .url(request.url!),
                   connectAutomatically: connectAutomatically,
                   connectionQueue: connectionQueue)
     }
-
+    
+    public convenience init(url: URL,
+                            connectAutomatically: Bool = false,
+                            options: NWProtocolWebSocket.Options = NWWebSocket.defaultOptions,
+                            connectionQueue: DispatchQueue = .main) {
+        
+        self.init(nwEndpoint: .url(url),
+                  connectAutomatically: connectAutomatically,
+                  connectionQueue: connectionQueue)
+    }
+    
     /// Creates a `NWWebSocket` instance which connects a socket `url` with some configuration `options`.
     /// - Parameters:
     ///   - url: The connection endpoint `URL`.
@@ -59,35 +69,48 @@ open class NWWebSocket: WebSocketConnection {
     ///                           The default value is `false`.
     ///   - options: The configuration options for the connection. The default value is `NWWebSocket.defaultOptions`.
     ///   - connectionQueue: A `DispatchQueue` on which to deliver all connection events. The default value is `.main`.
-    public init(url: URL,
+    public init(nwEndpoint:NWEndpoint,
                 connectAutomatically: Bool = false,
                 options: NWProtocolWebSocket.Options = NWWebSocket.defaultOptions,
                 connectionQueue: DispatchQueue = .main) {
-
-        endpoint = .url(url)
-
-        if url.scheme == "ws" {
+      
+        switch nwEndpoint{
+        case .url(let url):
+            if url.scheme == "ws" {
+                parameters = NWParameters.tcp
+            } else {
+                parameters = NWParameters.tls
+            }
+        case .service(_, let type, _, _):
+            if type.contains("tls"){
+                parameters = NWParameters.tls
+            }else{
+                parameters = NWParameters.tcp
+            }
+        default:
             parameters = NWParameters.tcp
-        } else {
-            parameters = NWParameters.tls
         }
-
+        endpoint = nwEndpoint
+        
+        
+        
+        
         parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
-
+        
         self.connectionQueue = connectionQueue
-
+        
         if connectAutomatically {
             connect()
         }
     }
-
+    
     deinit {
         connection?.intentionalDisconnection = true
         connection?.cancel()
     }
-
+    
     // MARK: - WebSocketConnection conformance
-
+    
     /// Connect to the WebSocket.
     open func connect() {
         if connection == nil {
@@ -107,7 +130,7 @@ open class NWWebSocket: WebSocketConnection {
             connection?.start(queue: connectionQueue)
         }
     }
-
+    
     /// Send a UTF-8 formatted `String` over the WebSocket.
     /// - Parameter string: The `String` that will be sent.
     open func send(string: String) {
@@ -117,31 +140,31 @@ open class NWWebSocket: WebSocketConnection {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "textContext",
                                                   metadata: [metadata])
-
+        
         send(data: data, context: context)
     }
-
+    
     /// Send some `Data` over the WebSocket.
     /// - Parameter data: The `Data` that will be sent.
     open func send(data: Data) {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
         let context = NWConnection.ContentContext(identifier: "binaryContext",
                                                   metadata: [metadata])
-
+        
         send(data: data, context: context)
     }
-
+    
     /// Start listening for messages over the WebSocket.
     public func listen() {
         connection?.receiveMessage { [weak self] (data, context, _, error) in
             guard let self = self else {
                 return
             }
-
+            
             if let data = data, !data.isEmpty, let context = context {
                 self.receiveMessage(data: data, context: context)
             }
-
+            
             if let error = error {
                 self.reportErrorOrDisconnection(error)
             } else {
@@ -149,7 +172,7 @@ open class NWWebSocket: WebSocketConnection {
             }
         }
     }
-
+    
     /// Ping the WebSocket periodically.
     /// - Parameter interval: The `TimeInterval` (in seconds) with which to ping the server.
     open func ping(interval: TimeInterval) {
@@ -157,12 +180,12 @@ open class NWWebSocket: WebSocketConnection {
             guard let self = self else {
                 return
             }
-
+            
             self.ping()
         }
         pingTimer?.tolerance = 0.01
     }
-
+    
     /// Ping the WebSocket once.
     open func ping() {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
@@ -170,7 +193,7 @@ open class NWWebSocket: WebSocketConnection {
             guard let self = self else {
                 return
             }
-
+            
             if let error = error {
                 self.reportErrorOrDisconnection(error)
             } else {
@@ -179,15 +202,15 @@ open class NWWebSocket: WebSocketConnection {
         }
         let context = NWConnection.ContentContext(identifier: "pingContext",
                                                   metadata: [metadata])
-
+        
         send(data: "ping".data(using: .utf8), context: context)
     }
-
+    
     /// Disconnect from the WebSocket.
     /// - Parameter closeCode: The code to use when closing the WebSocket connection.
     open func disconnect(closeCode: NWProtocolWebSocket.CloseCode = .protocolCode(.normalClosure)) {
         connection?.intentionalDisconnection = true
-
+        
         // Call `cancel()` directly for a `normalClosure`
         // (Otherwise send the custom closeCode as a message).
         if closeCode == .protocolCode(.normalClosure) {
@@ -199,7 +222,7 @@ open class NWWebSocket: WebSocketConnection {
             metadata.closeCode = closeCode
             let context = NWConnection.ContentContext(identifier: "closeContext",
                                                       metadata: [metadata])
-
+            
             if connection?.state == .ready {
                 // See implementation of `send(data:context:)` for `scheduleDisconnection(closeCode:, reason:)`
                 send(data: nil, context: context)
@@ -208,11 +231,11 @@ open class NWWebSocket: WebSocketConnection {
             }
         }
     }
-
+    
     // MARK: - Private methods
-
+    
     // MARK: Connection state changes
-
+    
     /// The handler for managing changes to the `connection.state` via the `stateUpdateHandler` on a `NWConnection`.
     /// - Parameter state: The new `NWConnection.State`
     private func stateDidChange(to state: NWConnection.State) {
@@ -223,7 +246,7 @@ open class NWWebSocket: WebSocketConnection {
         case .waiting(let error):
             isMigratingConnection = false
             reportErrorOrDisconnection(error)
-
+            
             /// Workaround to prevent loop while reconnecting
             errorWhileWaitingCount += 1
             if errorWhileWaitingCount >= errorWhileWaitingLimit {
@@ -243,7 +266,7 @@ open class NWWebSocket: WebSocketConnection {
             fatalError()
         }
     }
-
+    
     /// The handler for informing the `delegate` if there is a better network path available
     /// - Parameter isAvailable: `true` if a better network path is available.
     private func betterPath(isAvailable: Bool) {
@@ -252,18 +275,18 @@ open class NWWebSocket: WebSocketConnection {
                 guard let self = self else {
                     return
                 }
-
+                
                 self.delegate?.webSocketDidAttemptBetterPathMigration(result: result)
             }
         }
     }
-
+    
     /// The handler for informing the `delegate` if the network connection viability has changed.
     /// - Parameter isViable: `true` if the network connection is viable.
     private func viabilityDidChange(isViable: Bool) {
         delegate?.webSocketViabilityDidChange(connection: self, isViable: isViable)
     }
-
+    
     /// Attempts to migrate the active `connection` to a new one.
     ///
     /// Migrating can be useful if the active `connection` detects that a better network path has become available.
@@ -287,9 +310,9 @@ open class NWWebSocket: WebSocketConnection {
         listen()
         connection?.start(queue: connectionQueue)
     }
-
+    
     // MARK: Connection data transfer
-
+    
     /// Receive a WebSocket message, and handle it according to it's metadata.
     /// - Parameters:
     ///   - data: The `Data` that was received in the message.
@@ -298,7 +321,7 @@ open class NWWebSocket: WebSocketConnection {
         guard let metadata = context.protocolMetadata.first as? NWProtocolWebSocket.Metadata else {
             return
         }
-
+        
         switch metadata.opcode {
         case .binary:
             self.delegate?.webSocketDidReceiveMessage(connection: self,
@@ -325,7 +348,7 @@ open class NWWebSocket: WebSocketConnection {
             fatalError()
         }
     }
-
+    
     /// Send some `Data` over the  active `connection`.
     /// - Parameters:
     ///   - data: Some `Data` to send (this should be formatted as binary or UTF-8 encoded text).
@@ -338,22 +361,22 @@ open class NWWebSocket: WebSocketConnection {
             guard let self = self else {
                 return
             }
-
+            
             // If a connection closure was sent, inform delegate on completion
             if let socketMetadata = context.protocolMetadata.first as? NWProtocolWebSocket.Metadata,
                socketMetadata.opcode == .close {
                 self.scheduleDisconnectionReporting(closeCode: socketMetadata.closeCode,
                                                     reason: data)
             }
-
+            
             if let error = error {
                 self.reportErrorOrDisconnection(error)
             }
         }))
     }
-
+    
     // MARK: Connection cleanup
-
+    
     /// Schedules the reporting of a WebSocket disconnection.
     ///
     /// The disconnection will be actually reported once the underlying `NWConnection` has been fully torn down.
@@ -364,7 +387,7 @@ open class NWWebSocket: WebSocketConnection {
                                                 reason: Data?) {
         // Cancel any existing `disconnectionWorkItem` that was set first
         disconnectionWorkItem?.cancel()
-
+        
         disconnectionWorkItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.delegate?.webSocketDidDisconnect(connection: self,
@@ -372,7 +395,7 @@ open class NWWebSocket: WebSocketConnection {
                                                   reason: reason)
         }
     }
-
+    
     /// Tear down the `connection`.
     ///
     /// This method should only be called in response to a `connection` which has entered either
@@ -385,12 +408,12 @@ open class NWWebSocket: WebSocketConnection {
         pingTimer?.invalidate()
         connection?.cancel()
         connection = nil
-
+        
         if let disconnectionWorkItem = disconnectionWorkItem {
             connectionQueue.async(execute: disconnectionWorkItem)
         }
     }
-
+    
     /// Reports the `error` to the `delegate` (if appropriate) and if it represents an unexpected
     /// disconnection event, the disconnection will also be reported.
     /// - Parameter error: The `NWError` to inspect.
@@ -398,14 +421,14 @@ open class NWWebSocket: WebSocketConnection {
         if shouldReportNWError(error) {
             delegate?.webSocketDidReceiveError(connection: self, error: error)
         }
-
+        
         if isDisconnectionNWError(error) {
             let reasonData = "The websocket disconnected unexpectedly".data(using: .utf8)
             scheduleDisconnectionReporting(closeCode: .protocolCode(.goingAway),
                                            reason: reasonData)
         }
     }
-
+    
     /// Determine if a Network error should be reported.
     ///
     /// POSIX errors of either `ENOTCONN` ("Socket is not connected") or
@@ -422,7 +445,7 @@ open class NWWebSocket: WebSocketConnection {
             return true
         }
     }
-
+    
     /// Determine if a Network error represents an unexpected disconnection event.
     /// - Parameter error: The `NWError` to inspect.
     /// - Returns: `true` if the error represents an unexpected disconnection event.
